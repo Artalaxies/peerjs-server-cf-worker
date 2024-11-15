@@ -1,18 +1,55 @@
+import { DurableObject } from "cloudflare:workers";
+
+
 const WELCOME_TEXT =
 	'{"name":"PeerJS Server","description":"A server side element to broker connections between PeerJS clients.","website":"https://peerjs.com/"}';
 const HEARTBEAT = '{"type":"HEARTBEAT"}';
 const OPEN = '{"type":"OPEN"}';
 const ID_TAKEN = '{"type":"ID-TAKEN","payload":{"msg":"ID is taken"}}';
 
-export class PeerServerDO implements DurableObject {
+export interface Env {
+	PEER_SERVER: DurableObjectNamespace;
+  }
+
+
+export class PeerServerDO extends DurableObject {
 	constructor(
-		private state: DurableObjectState,
-		private env: Env,
+		state: DurableObjectState,
+		env: Env,
 	) {
+		super(state, env);
+		this.state = state;
+		this.env = env;
 		this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT, HEARTBEAT));
 	}
+
+	state: DurableObjectState;
+	declare env: Env;
+
+	async getPeers(): Promise<string[]> {
+		const peers: string[] = [];
+		for (const ws of this.state.getWebSockets()) {
+			const attachment = ws.deserializeAttachment();
+			if (attachment?.id) {
+				peers.push(attachment.id);
+			}
+		}
+		return peers;
+	}
+
 	async fetch(request: Request) {
 		const url = new URL(request.url);
+
+		if (url.pathname === '/peerjs/peers') {
+			const peers = await this.getPeers();
+			return new Response(JSON.stringify(peers), {
+				headers: {
+					'Content-Type': 'application/json',
+					'Access-Control-Allow-Origin': '*',
+				}
+			});
+		}
+
 		const id = url.searchParams.get('id');
 		const token = url.searchParams.get('token');
 		if (!id || !token) return new Response(null, { status: 400 });
@@ -42,6 +79,7 @@ export class PeerServerDO implements DurableObject {
 	}
 }
 
+
 export default {
 	async fetch(request: Request, env: Env) {
 		const url = new URL(request.url);
@@ -50,6 +88,7 @@ export default {
 			case '/':
 				return new Response(WELCOME_TEXT);
 			case '/peerjs':
+			case '/peerjs/peers':
 				let objId = env.PEER_SERVER.idFromName(url.host);
 				let stub = env.PEER_SERVER.get(objId);
 				return stub.fetch(request);
@@ -65,4 +104,4 @@ export default {
 				return new Response(null, { status: 404 });
 		}
 	},
-};
+} satisfies ExportedHandler<Env>;
